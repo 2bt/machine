@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <string.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -21,7 +22,10 @@ public:
 		this->w = w;
 		if (data) delete [] data;
 		data = new T[w * h];
-		fill(0);
+		zero();
+	}
+	void zero() {
+		memset(data, 0, w * h * sizeof(T));
 	}
 	void fill(T f) {
 		for(size_t i = 0; i < w * h; i++) data[i] = f;
@@ -177,7 +181,8 @@ void train(int iterations) {
 	vector<vector<size_t>>	f_corpus;
 	size_t f_msl = read_corpus(base + "." + f_lang, f_word2id, f_id2word, f_corpus);
 	size_t e_msl = read_corpus(base + "." + e_lang, e_word2id, e_id2word, e_corpus);
-	if (e_corpus.size() != f_corpus.size()) {
+	size_t corpus_size = e_corpus.size();
+	if (corpus_size != f_corpus.size()) {
 		cerr << "Corpora size differs.\n";
 		exit(1);
 	}
@@ -202,11 +207,10 @@ void train(int iterations) {
 	cout << "Generating length model...\n";
 	matrix<float> lenmodel;
 	lenmodel.init(f_msl, e_msl);
-	for (size_t l = 0; l < e_corpus.size(); l++) {
+	for (size_t l = 0; l < corpus_size; l++) {
 		lenmodel[f_corpus[l].size() - 1][e_corpus[l].size() - 1]++;
 	}
 	normalize(lenmodel);
-
 
 
 	// dictionary training
@@ -219,9 +223,8 @@ void train(int iterations) {
 	cout << "Training dictionary...\n";
 	for (int count = 0; count < iterations; count++) {
 		cout << "Step " << count + 1 << "...\n";
-
-		c.fill(0);
-		for (size_t l = 0; l < e_corpus.size(); l++) {
+		c.zero();
+		for (size_t l = 0; l < corpus_size; l++) {
 			for (size_t f : f_corpus[l]) {
 				float s = 0;
 				for (size_t e : e_corpus[l]) s += dict[f][e];
