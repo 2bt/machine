@@ -1,11 +1,13 @@
 #include <signal.h>
 #include <string.h>
+#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <vector>
 #include <string>
 #include <map>
+#include <set>
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -112,9 +114,9 @@ map<string, size_t>		e_word2id;
 map<string, size_t>		f_word2id;
 vector<string>			e_id2word;
 vector<string>			f_id2word;
-matrix<float>			dict;
-matrix<float>			langmodel;
-matrix<float>			lenmodel;
+matrix<double>			dict;
+matrix<double>			langmodel;
+matrix<double>			lenmodel;
 
 
 void save() {
@@ -216,7 +218,7 @@ void train(int iterations) {
 
 
 	// dictionary training
-	matrix<float> c;
+	matrix<double> c;
 	dict.init(f_id2word.size(), e_id2word.size());
 	c.init(f_id2word.size(), e_id2word.size());
 	dict.fill(1);
@@ -228,7 +230,7 @@ void train(int iterations) {
 		c.zero();
 		for (size_t l = 0; l < corpus_size; l++) {
 			for (size_t f : f_corpus[l]) {
-				float s = 0;
+				double s = 0;
 				for (size_t e : e_corpus[l]) s += dict[f][e];
 				s = 1 / s;
 				for (size_t e : e_corpus[l]) c[f][e] += dict[f][e] * s;
@@ -253,7 +255,7 @@ void lookup() {
 		}
 		size_t id = f_word2id[word];
 		sentence_t top;
-		float s = 0;
+		double s = 0;
 		for (size_t i = 0; i < e_id2word.size(); i++) {
 			top.push_back(i);
 			s += dict[id][i];
@@ -277,16 +279,15 @@ void print_sentence(const sentence_t& s, const vector<string>& id2word) {
 }
 
 
-float rate_sentence(const sentence_t& e_s, const sentence_t& f_s) {
-
-
-	float p = 1;
+// <STACK-DECODING>
+double rate_heuristic(const sentence_t& e_s, const sentence_t& f_s) {
+	double p = 1;
 	for (size_t i = 1; i < e_s.size(); i++) {
 		p *= langmodel[e_s[i]][e_s[i - 1]];
 	}
 
 	for (size_t f : f_s) {
-		float s = 0;
+		double s = 0;
 		for (size_t e : e_s) {
 			if (e != e_id2word.size() - 1) s += dict[f][e];
 		}
@@ -297,14 +298,13 @@ float rate_sentence(const sentence_t& e_s, const sentence_t& f_s) {
 }
 
 
-
 void prune(vector<sentence_t>& H, const sentence_t& f_s) {
-	while (H.size() > 30) {
+	while (H.size() > 50) {
 
 		size_t j = 0;
-		float m = 9e9;
+		double m = 9e9;
 		for (size_t i = 0; i < H.size(); i++) {
-			float s = rate_sentence(H[i], f_s);
+			double s = rate_heuristic(H[i], f_s);
 			if (s < m) {
 				m = s;
 				j = i;
@@ -317,15 +317,12 @@ void prune(vector<sentence_t>& H, const sentence_t& f_s) {
 
 void decode_sentence(const sentence_t& f_s) {
 
-	//print_sentence(f_s, f_id2word);
 
-	vector<sentence_t> stack_a = { { e_id2word.size() - 1 } };
-	vector<sentence_t> stack_b;
+	vector<sentence_t> stacks[2] = { { { e_id2word.size() - 1 } }, {} };
 
-
-	vector<pair<size_t, float>> len;
+	vector<pair<size_t, double>> len;
 	for (size_t i = 0; i < e_id2word.size() - 1; i++) len.push_back({i, lenmodel[f_s.size() - 1][i]});
-	sort(len.begin(), len.end(), [](const pair<size_t, float>& a, const pair<size_t, float>& b){
+	sort(len.begin(), len.end(), [](const pair<size_t, double>& a, const pair<size_t, double>& b){
 		return a.second > b.second;
 	});
 	size_t l = min(len[0].first + 1, f_s.size() * 4 / 3);
@@ -334,8 +331,8 @@ void decode_sentence(const sentence_t& f_s) {
 	size_t i;
 	for (i = 0; i < l; i++) {
 
-		vector<sentence_t>& H		= i & 1 ? stack_b : stack_a;
-		vector<sentence_t>& H_next	= i & 1 ? stack_a : stack_b;
+		vector<sentence_t>& H		= stacks[i&1];
+		vector<sentence_t>& H_next	= stacks[!(i&1)];
 		H_next.clear();
 
 
@@ -357,17 +354,127 @@ void decode_sentence(const sentence_t& f_s) {
 			aa.push_back(e_id2word.size() - 1);
 			bb.push_back(e_id2word.size() - 1);
 
-			return rate_sentence(aa, f_s) > rate_sentence(bb, f_s);
+			return rate_heuristic(aa, f_s) > rate_heuristic(bb, f_s);
 		});
 
 	}
 
-	vector<sentence_t>& H = i & 1 ? stack_b : stack_a;
+	vector<sentence_t>& H = stacks[i&1];
 	for (size_t i = 0; i < min(H.size(), 1ul); i++) {
 		H[i].erase(H[i].begin());
 		print_sentence(H[i], e_id2word);
 	}
+}
+// </STACK-DECODING>
 
+
+
+double rate_sentence(const sentence_t& e_s, const sentence_t& f_s) {
+
+	// language model
+	size_t i;
+	double p = 1;
+	for (i = 1; i < e_s.size(); i++) {
+		p *= langmodel[e_s[i]][e_s[i - 1]];
+	}
+	p *= langmodel[e_s[0]][e_id2word.size()];
+	p *= langmodel[e_id2word.size()][e_s[i - 1]];
+	p = pow(p, 0.05);
+
+	for (size_t f : f_s) {
+		double s = 0;
+		for (size_t e : e_s) s += dict[f][e];
+		p *= s;
+	}
+
+	return p;
+}
+
+
+void hillclimb_sentence(const sentence_t& f_s) {
+
+
+	// initialise sentence
+	sentence_t e_s;
+	for (size_t f : f_s) {
+		size_t e = 0;
+		for (size_t i = 1; i < dict.width(); i++) {
+			if (dict[f][i] > dict[f][e]) e = i;
+		}
+		e_s.push_back(e);
+	}
+	set<sentence_t> H = { e_s };
+
+
+	//print_sentence(e_s, e_id2word);
+
+
+	for (size_t step = 0; step < 1000; step++) {
+
+		auto it = H.begin();
+		advance(it, rand() % H.size());
+		sentence_t e_s = *it;
+		double p = rate_sentence(e_s, f_s);
+
+		bool found;
+
+		switch (rand() % 2) {
+		case 0: {	// swap two words
+				size_t& e1 = e_s[rand() % e_s.size()];
+				size_t& e2 = e_s[rand() % e_s.size()];
+
+				swap(e1, e2);
+				double q = rate_sentence(e_s, f_s);
+				if (p < q) {
+					p = q;
+					H.insert(e_s);
+					break;
+				} else {
+					swap(e1, e2);
+				}
+			}
+		case 1: {	// replaceing a word
+				found = false;
+				size_t& e = e_s[rand() % e_s.size()];
+				for (size_t i = 0; i < e_id2word.size(); i++) {
+					size_t old_e = e;
+					e = i;
+					double q = rate_sentence(e_s, f_s);
+					if (p < q) {
+						found = true;
+						p = q;
+					} else {
+						e = old_e;
+					}
+				}
+				if (found) {
+					H.insert(e_s);
+					break;
+				}
+			}
+		}
+
+
+		// prune
+		while (H.size() > 10) {
+			H.erase(min_element(H.begin(), H.end(), [&](const sentence_t& a, const sentence_t& b){
+				return rate_sentence(a, f_s) < rate_sentence(b, f_s);
+			}));
+		}
+
+	}
+
+	// print all sentences generated
+	//for (const sentence_t& e_s : H) print_sentence(e_s, e_id2word);
+
+	// print the best sentence
+	e_s = *max_element(H.begin(), H.end(), [&](const sentence_t& a, const sentence_t& b){
+		return rate_sentence(a, f_s) < rate_sentence(b, f_s);
+	});
+	print_sentence(e_s, e_id2word);
+
+
+	//cout << endl;
 }
 
 
@@ -376,8 +483,8 @@ void decode() {
 	load();
 	cerr << "Decoding...\n";
 
-	e_word2id["#"] = e_id2word.size();
-	e_id2word.push_back("#");
+//	e_word2id["#"] = e_id2word.size();
+//	e_id2word.push_back("#");
 
 	string line;
 	while (getline(cin, line)) {
@@ -393,7 +500,8 @@ void decode() {
 			f_s.push_back(id);
 		}
 
-		decode_sentence(f_s);
+		//decode_sentence(f_s);
+		hillclimb_sentence(f_s);
 	}
 }
 
