@@ -1,2 +1,2 @@
 #!/bin/sh
-./machine ../europarl-v7.de-en.tokenizer.lowercase.clean.nubbed.2048.train de.txt en.txt lookup
+./machine ../europarl-v7.de-en.tokenizer.lowercase.clean.nubbed.4096.train de.txt en.txt lookup

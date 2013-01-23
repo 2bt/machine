@@ -8,9 +8,16 @@
 #include <map>
 #include <algorithm>
 #include <cmath>
+#include <utility>
+
 using namespace std;
 
 #include <assert.h>
+
+
+typedef vector<size_t> sentence_t;
+
+
 
 template <typename T>
 class matrix {
@@ -48,6 +55,7 @@ public:
 			for (size_t y = 0; y < h; y++) s += (*this)[y][x];
 			s = 1 / s;
 			for (size_t y = 0; y < h; y++) (*this)[y][x] = ((*this)[y][x] + 1) * s;
+			//for (size_t y = 0; y < h; y++) (*this)[y][x] = (*this)[y][x] * s; // no smooth
 		}
 	}
 	void save(ofstream& file) {
@@ -67,8 +75,7 @@ public:
 size_t read_corpus(const string filename,
 		map<string, size_t>& word2id,
 		vector<string>& id2word,
-		vector<vector<size_t>>& corpus) {
-
+		vector<sentence_t>& corpus) {
 
 	ifstream file(filename.c_str());
 	if (!file.is_open()) {
@@ -80,7 +87,7 @@ size_t read_corpus(const string filename,
 	size_t maxlen = 0;
 	while (getline(file, line)) {
 		stringstream words(line);
-		vector<size_t> sentence;
+		sentence_t sentence;
 		string word;
 		while (words >> word) {
 			size_t id;
@@ -119,9 +126,11 @@ void save() {
 		exit(1);
 	}
 
-	file << f_id2word.size() << "\n";
+	size_t len = f_id2word.size();
+	file.write((const char*) &len, sizeof(size_t));
 	for (auto s : f_id2word) file << s << "\n";
-	file << e_id2word.size() << "\n";
+	len = e_id2word.size();
+	file.write((const char*) &len, sizeof(size_t));
 	for (auto s : e_id2word) file << s << "\n";
 
 	langmodel.save(file);
@@ -141,13 +150,14 @@ void load() {
 
 	size_t len;
 	string s;
-	file >> len;
+	file.read((char*) &len, sizeof(size_t));
 	for (size_t i = 0; i < len; i++) {
 		file >> s;
 		f_word2id[s] = i;
 		f_id2word.push_back(s);
 	}
-	file >> len;
+	file.get();
+	file.read((char*) &len, sizeof(size_t));
 	for (size_t i = 0; i < len; i++) {
 		file >> s;
 		e_word2id[s] = i;
@@ -156,7 +166,7 @@ void load() {
 	dict.init(f_id2word.size(), e_id2word.size());
 
 	// binary for speed
-	file.seekg(1, ios_base::cur); // skip newline
+	file.get();
 	langmodel.load(file);
 	lenmodel.load(file);
 	dict.load(file);
@@ -171,8 +181,8 @@ void leaving(int sig) {
 
 void train(int iterations) {
 	cerr << "Reading corpora...\n";
-	vector<vector<size_t>>	e_corpus;
-	vector<vector<size_t>>	f_corpus;
+	vector<sentence_t>	e_corpus;
+	vector<sentence_t>	f_corpus;
 	size_t f_msl = read_corpus(base + "." + f_lang, f_word2id, f_id2word, f_corpus);
 	size_t e_msl = read_corpus(base + "." + e_lang, e_word2id, e_id2word, e_corpus);
 	size_t corpus_size = e_corpus.size();
@@ -185,7 +195,7 @@ void train(int iterations) {
 	// language model
 	cerr << "Generating language model...\n";
 	langmodel.init(e_id2word.size() + 1, e_id2word.size() + 1);
-	for (vector<size_t>& sentence : e_corpus) {
+	for (const sentence_t& sentence : e_corpus) {
 		size_t prev_id = e_id2word.size();
 		for (size_t id : sentence) {
 			langmodel[id][prev_id]++;
@@ -242,7 +252,7 @@ void lookup() {
 			continue;
 		}
 		size_t id = f_word2id[word];
-		vector<size_t> top;
+		sentence_t top;
 		float s = 0;
 		for (size_t i = 0; i < e_id2word.size(); i++) {
 			top.push_back(i);
@@ -258,34 +268,27 @@ void lookup() {
 }
 
 
-float prob(const vector<size_t>& f_s, const vector<size_t>& e_s) {
+void print_sentence(const sentence_t& s, const vector<string>& id2word) {
+	for (size_t i = 0; i < s.size(); i++) {
+		if (i) cout << " ";
+		cout << id2word[s[i]];
+	}
+	cout << "\n";
+}
 
-	//if (e_s.size() < 1) return 0;
+
+float rate_sentence(const sentence_t& e_s, const sentence_t& f_s) {
+
 
 	float p = 1;
 	for (size_t i = 1; i < e_s.size(); i++) {
 		p *= langmodel[e_s[i]][e_s[i - 1]];
 	}
 
-	p /= pow(e_s.size() - 1 - (e_s.back() == e_id2word.size() - 1), f_s.size() - 2);
-
-
-	//p /= 1 + pow(f_s.size() - e_s.size(), 2);
-/*
-	if (f_s.size() - 3 < lenmodel.height() || e_s.size() - 3 < lenmodel.width()) {
-		p *= lenmodel[f_s.size() - 3][e_s.size() - 3];
-	}
-	else {
-		return 1;
-	}
-*/
-
-	for (size_t i = 1; i < f_s.size() - 1; i++) {
+	for (size_t f : f_s) {
 		float s = 0;
 		for (size_t e : e_s) {
-			if (e != e_id2word.size() - 1) {
-				s += dict[f_s[i]][e];
-			}
+			if (e != e_id2word.size() - 1) s += dict[f][e];
 		}
 		p *= s;
 	}
@@ -294,23 +297,92 @@ float prob(const vector<size_t>& f_s, const vector<size_t>& e_s) {
 }
 
 
-void print_sentence(vector<size_t>& s) {
-	for (size_t i = 0; i < s.size(); i++) {
-		if (i) cout << " ";
-		cout << e_id2word[s[i]];
+
+void prune(vector<sentence_t>& H, const sentence_t& f_s) {
+	while (H.size() > 30) {
+
+		size_t j = 0;
+		float m = 9e9;
+		for (size_t i = 0; i < H.size(); i++) {
+			float s = rate_sentence(H[i], f_s);
+			if (s < m) {
+				m = s;
+				j = i;
+			}
+		}
+		H.erase(H.begin() + j);
 	}
-	cout << "\n";
 }
+
+
+void decode_sentence(const sentence_t& f_s) {
+
+	//print_sentence(f_s, f_id2word);
+
+	vector<sentence_t> stack_a = { { e_id2word.size() - 1 } };
+	vector<sentence_t> stack_b;
+
+
+	vector<pair<size_t, float>> len;
+	for (size_t i = 0; i < e_id2word.size() - 1; i++) len.push_back({i, lenmodel[f_s.size() - 1][i]});
+	sort(len.begin(), len.end(), [](const pair<size_t, float>& a, const pair<size_t, float>& b){
+		return a.second > b.second;
+	});
+	size_t l = min(len[0].first + 1, f_s.size() * 4 / 3);
+
+
+	size_t i;
+	for (i = 0; i < l; i++) {
+
+		vector<sentence_t>& H		= i & 1 ? stack_b : stack_a;
+		vector<sentence_t>& H_next	= i & 1 ? stack_a : stack_b;
+		H_next.clear();
+
+
+		for (sentence_t& h : H) {
+
+			for (size_t e = 0; e < e_id2word.size() - 1; e++) {
+
+				h.push_back(e);
+				H_next.push_back(h);
+				h.pop_back();
+
+				prune(H_next, f_s);
+			}
+		}
+
+		sort(H_next.begin(), H_next.end(), [&](const sentence_t& a, const sentence_t& b) {
+			sentence_t aa(a);
+			sentence_t bb(b);
+			aa.push_back(e_id2word.size() - 1);
+			bb.push_back(e_id2word.size() - 1);
+
+			return rate_sentence(aa, f_s) > rate_sentence(bb, f_s);
+		});
+
+	}
+
+	vector<sentence_t>& H = i & 1 ? stack_b : stack_a;
+	for (size_t i = 0; i < min(H.size(), 1ul); i++) {
+		H[i].erase(H[i].begin());
+		print_sentence(H[i], e_id2word);
+	}
+
+}
+
 
 
 void decode() {
 	load();
 	cerr << "Decoding...\n";
 
+	e_word2id["#"] = e_id2word.size();
+	e_id2word.push_back("#");
+
 	string line;
 	while (getline(cin, line)) {
 		stringstream words(line);
-		vector<size_t> f_s;
+		sentence_t f_s;
 
 		string word;
 		while (words >> word) {
@@ -321,47 +393,7 @@ void decode() {
 			f_s.push_back(id);
 		}
 
-		vector<vector<size_t>> H;
-		vector<size_t> h;
-
-		do {
-			for (size_t e = 0; e < e_id2word.size(); e++) {
-
-				h.push_back(e);
-				H.push_back(h);
-				h.pop_back();
-				while (H.size() > 50) {
-
-					size_t j = 0;
-					float m = 9e9;
-					for (size_t i = 0; i < H.size(); i++) {
-						float s = prob(f_s, H[i]);
-						if (s < m) {
-							m = s;
-							j = i;
-						}
-					}
-					H.erase(H.begin() + j);
-				}
-			}
-
-			size_t j = 0;
-			float m = 0;
-			for (size_t i = 0; i < H.size(); i++) {
-				float s = prob(f_s, H[i]);
-				//cout << s << ": "; print_sentence(H[i]);
-				if (s > m) {
-					m = s;
-					j = i;
-				}
-			}
-			assert(m > 0);
-			h = H[j];
-			H.erase(H.begin() + j);
-
-		} while (h.back() != e_id2word.size() - 1);
-
-		print_sentence(h);
+		decode_sentence(f_s);
 	}
 }
 
