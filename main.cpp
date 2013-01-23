@@ -456,7 +456,7 @@ void hillclimb_sentence(const sentence_t& f_s) {
 
 
 		// prune
-		while (H.size() > 10) {
+		while (H.size() > 30) {
 			H.erase(min_element(H.begin(), H.end(), [&](const sentence_t& a, const sentence_t& b){
 				return rate_sentence(a, f_s) < rate_sentence(b, f_s);
 			}));
@@ -507,6 +507,7 @@ void decode() {
 
 
 int main(int argc, char** argv) {
+	srand(time(nullptr));
 	if (argc < 5) {
 		cout << "usage: " << argv[0] << " <base> <e> <f> <action> [iterations]\n";
 		return 0;
